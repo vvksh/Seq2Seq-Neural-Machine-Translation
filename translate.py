@@ -44,9 +44,10 @@ import tensorflow as tf
 
 import data_utils
 import seq2seq_model
+import convertToFrench
 
 
-tf.app.flags.DEFINE_float("learning_rate", 0.2, "Learning rate.")
+tf.app.flags.DEFINE_float("learning_rate", 0.5, "Learning rate.")
 tf.app.flags.DEFINE_float("learning_rate_decay_factor", 0.99,
                           "Learning rate decays by this much.")
 tf.app.flags.DEFINE_float("max_gradient_norm", 5.0,
@@ -55,26 +56,29 @@ tf.app.flags.DEFINE_integer("batch_size", 64,
                             "Batch size to use during training.")
 tf.app.flags.DEFINE_integer("size", 512, "Size of each model layer.")
 tf.app.flags.DEFINE_integer("num_layers", 3, "Number of layers in the model.")
-tf.app.flags.DEFINE_integer("from_vocab_size", 80000, "English vocabulary size.")
-tf.app.flags.DEFINE_integer("to_vocab_size", 80000, "French vocabulary size.")
+tf.app.flags.DEFINE_integer("vocab_size", 80000, "French vocabulary size.")
 tf.app.flags.DEFINE_string("data_dir", "/var/tmp/vksah/translate/data", "Data directory")
 tf.app.flags.DEFINE_string("train_dir", "/var/tmp/vksah/translate/checkpoints", "Training directory.")
-tf.app.flags.DEFINE_string("from_train_data", None, "Training data.")
-tf.app.flags.DEFINE_string("to_train_data", None, "Training data.")
-tf.app.flags.DEFINE_string("from_dev_data", None, "Training data.")
-tf.app.flags.DEFINE_string("to_dev_data", None, "Training data.")
+tf.app.flags.DEFINE_string("from_train_data","/var/tmp/vksah/translate/data/source_train80k.en" , "Training data.")
+tf.app.flags.DEFINE_string("to_train_data", "/var/tmp/vksah/translate/data/target_train.fr", "Training data.")
+tf.app.flags.DEFINE_string("from_dev_data", "/var/tmp/vksah/translate/data/source_dev80k.en", "Training data.")
+tf.app.flags.DEFINE_string("to_dev_data", "/var/tmp/vksah/translate/data/target_dev.fr", "Training data.")
+tf.app.flags.DEFINE_string("from_vocab_path", "/var/tmp/vksah/translate/data/vocab_40plus40.from", "french vocab file.")
+tf.app.flags.DEFINE_string("to_vocab_path", "/var/tmp/vksah/translate/data/vocab_40plus40.to", "same vocab file.")
+
+
 tf.app.flags.DEFINE_integer("max_train_data_size", 0,
                             "Limit on the size of training data (0: no limit).")
 tf.app.flags.DEFINE_integer("steps_per_checkpoint", 200,
                             "How many training steps to do per checkpoint.")
 tf.app.flags.DEFINE_boolean("decode", False,
-                            "Set to True for interactive decoding.")
+                             "Set to True for interactive decoding.")
 tf.app.flags.DEFINE_boolean("self_test", False,
                             "Run a self-test if this is set to True.")
 tf.app.flags.DEFINE_boolean("use_fp16", False,
                             "Train using fp16 instead of fp32.")
 
-tf.app.flags.DEFINE_integer("total_steps", 10000,
+tf.app.flags.DEFINE_integer("total_steps", 20000,
                             "total steps to train.")
 FLAGS = tf.app.flags.FLAGS
 
@@ -82,6 +86,9 @@ FLAGS = tf.app.flags.FLAGS
 # See seq2seq_model.Seq2SeqModel for details of how they work.
 _buckets = [(5, 10), (10, 15), (20, 25), (40, 50)]
 
+performace_file = open("performance.csv",'a+')
+
+converter = convertToFrench.convertToFrench("new_eng_fr_dic")
 
 def read_data(source_path, target_path, max_size=None):
   """Read data from source and target files and put into buckets.
@@ -125,8 +132,8 @@ def create_model(session, forward_only):
   """Create translation model and initialize or load parameters in session."""
   dtype = tf.float16 if FLAGS.use_fp16 else tf.float32
   model = seq2seq_model.Seq2SeqModel(
-      FLAGS.from_vocab_size,
-      FLAGS.to_vocab_size,
+      FLAGS.vocab_size,
+      FLAGS.vocab_size,
       _buckets,
       FLAGS.size,
       FLAGS.num_layers,
@@ -161,19 +168,23 @@ def train():
     if FLAGS.from_dev_data and FLAGS.to_dev_data:
       from_dev_data = FLAGS.from_dev_data
       to_dev_data = FLAGS.to_dev_data
-    from_train, to_train, from_dev, to_dev, _, _ = data_utils.prepare_data(
+    from_train, to_train, from_dev, to_dev = data_utils.prepare_custom_data(
         FLAGS.data_dir,
         from_train_data,
         to_train_data,
         from_dev_data,
-        to_dev_data,
-        FLAGS.from_vocab_size,
-        FLAGS.to_vocab_size)
+        to_dev_data,   
+        FLAGS.from_vocab_path,
+        FLAGS.to_vocab_path,
+        FLAGS.vocab_size,
+        )
   else:
-      # Prepare WMT data.
-      print("Preparing WMT data in %s" % FLAGS.data_dir)
-      from_train, to_train, from_dev, to_dev, _, _ = data_utils.prepare_wmt_data(
-          FLAGS.data_dir, FLAGS.from_vocab_size, FLAGS.to_vocab_size)
+      print("data not ready")
+      return
+      # # Prepare WMT data.
+      # print("Preparing WMT data in %s" % FLAGS.data_dir)
+      # from_train, to_train, from_dev, to_dev, _, _ = data_utils.prepare_wmt_data(
+      #     FLAGS.data_dir, FLAGS.from_vocab_size, FLAGS.to_vocab_size)
   # print(from_dev, to_dev)
 
   config = tf.ConfigProto()
@@ -225,11 +236,17 @@ def train():
       # Once in a while, we save checkpoint, print statistics, and run evals.
       if current_step % FLAGS.steps_per_checkpoint == 0:
         # Print statistics for the previous epoch.
+        statistics=[ ]
+        statistics.append(model.global_step.eval())
+        statistics.append(model.learning_rate.eval())
+        
         perplexity = math.exp(float(loss)) if loss < 300 else float("inf")
         print ("global step %d learning rate %.4f step-time %.2f perplexity "
                "%.2f" % (model.global_step.eval(), model.learning_rate.eval(),
                          step_time, perplexity))
+        statistics.append(perplexity)
         # Decrease learning rate if no improvement was seen over last 3 times.
+        
         if len(previous_losses) > 2 and loss > max(previous_losses[-3:]):
           sess.run(model.learning_rate_decay_op)
         previous_losses.append(loss)
@@ -249,7 +266,10 @@ def train():
           # print(output_logits.shape())
           eval_ppx = math.exp(float(eval_loss)) if eval_loss < 300 else float(
               "inf")
+          statistics.append(eval_ppx)
           print("  eval: bucket %d perplexity %.2f" % (bucket_id, eval_ppx))
+        performance_summary = ",".join([str(stat) for stat in statistics])+"\n"
+        performace_file.write(performance_summary)
         sys.stdout.flush()
 
 def calculateBleu():
@@ -331,10 +351,8 @@ def decode():
     model.batch_size = 1  # We decode one sentence at a time.
 
     # Load vocabularies.
-    en_vocab_path = os.path.join(FLAGS.data_dir,
-                                 "vocab%d.from" % FLAGS.from_vocab_size)
-    fr_vocab_path = os.path.join(FLAGS.data_dir,
-                                 "vocab%d.to" % FLAGS.to_vocab_size)
+    en_vocab_path = FLAGS.from_vocab_path
+    fr_vocab_path = FLAGS.to_vocab_path
     en_vocab, _ = data_utils.initialize_vocabulary(en_vocab_path)
     _, rev_fr_vocab = data_utils.initialize_vocabulary(fr_vocab_path)
 
@@ -342,8 +360,10 @@ def decode():
     sys.stdout.write("> ")
     sys.stdout.flush()
     sentence = sys.stdin.readline()
+
     while sentence:
       # Get token-ids for the input sentence.
+      sentence = converter.convertToFrenchSentence(sentence)
       token_ids = data_utils.sentence_to_token_ids(tf.compat.as_bytes(sentence), en_vocab)
       # Which bucket does it belong to?
       bucket_id = len(_buckets) - 1

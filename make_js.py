@@ -1,20 +1,19 @@
 import os
 import subprocess 
 file = open("./data/vocab80000.from")
-js = open("test.js",'a+')
 lines = file.readlines()
 count  =0
 header_line = "const translate = require('google-translate-api');\nvar sleep = require('sleep');\n"
 # os.system(": > test_5k.js")
 
 
-file = open("populate_dic.js", 'a+')
+file = open("populate_dic_2.js", 'a+')
 file.write(header_line)
 file.close()
 # js.write(header_line)
 # js.write(header_line)
 arr = []
-for line in lines:
+for line in lines[40000:]:
 	# file = open(filenames[count/5000],'a+')
 	line = line.strip()
 	arr.append(line)
@@ -38,7 +37,7 @@ for line in lines:
 		# os.system(": > test.js")
 		# js.write(header_line)
 
-file = open("populate_dic.js", 'a+');
+file = open("populate_dic_2.js", 'a+');
 file.write("var arr ="+str(arr) +";")
 file.close()
 # var processItems = function(x){
